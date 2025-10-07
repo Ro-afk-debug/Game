@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber-Jump Runner Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        /* Custom CSS for a retro game feel */
+        body {
+            font-family: 'Press Start 2P', monospace;
+            background-color: #1a202c; /* Tailwind gray-900 */
+            color: #48bb78; /* Tailwind green-500 (Cyber green) */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+
+        #game-container {
+            background-color: #000000;
+            border: 8px solid #48bb78; /* Neon green border */
+            box-shadow: 0 0 20px #48bb78, inset 0 0 10px #48bb78;
+            border-radius: 12px;
+            padding: 20px;
+            max-width: 90vw;
+            width: 600px;
+            text-align: center;
+            position: relative;
+        }
+
+        canvas {
+            display: block;
+            background-color: #111827; /* Dark background */
+            border-radius: 6px;
+            width: 100%;
+            touch-action: manipulation; /* Prevents double-tap zoom on touch devices */
+        }
+
+        /* Styling for the interactive buttons */
+        .game-button {
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: bold;
+            text-transform: uppercase;
+            border: 4px solid #48bb78;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s ease-in-out;
+            background-color: #051010;
+            color: #48bb78;
+            box-shadow: 0 4px 0 #38a169;
+            outline: none;
+            line-height: 1;
+        }
+
+        .game-button:hover:not(:disabled) {
+            background-color: #48bb78;
+            color: #1a202c;
+            box-shadow: 0 6px 0 #38a169;
+            transform: translateY(-2px);
+        }
+
+        .game-button:active:not(:disabled) {
+            box-shadow: 0 2px 0 #38a169;
+            transform: translateY(2px);
+        }
+
+        .game-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+        }
+
+        /* Game Over Modal Styling */
+        #game-message {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.85);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            border-radius: 12px;
+            z-index: 10;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease;
+        }
+
+        #game-message.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        #message-text {
+            color: #e53e3e; /* Red for danger/loss */
+            font-size: 20px;
+            margin-bottom: 20px;
+            text-shadow: 0 0 8px #e53e3e;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- Game Over Message Box -->
+        <div id="game-message">
+            <div id="message-text">GAME OVER</div>
+            <p id="final-score" class="text-white text-lg mb-4"></p>
+            <button id="restart-button" class="game-button">Restart</button>
+        </div>
+
+        <!-- Game Canvas -->
+        <canvas id="gameCanvas" width="560" height="200"></canvas>
+
+        <!-- Controls -->
+        <div id="controls" class="mt-5 flex justify-center space-x-4">
+            <button id="start-button" class="game-button">Start Game (Space)</button>
+            <button id="jump-button" class="game-button hidden sm:block">JUMP</button>
+        </div>
+        
+        <!-- Score Display -->
+        <div id="score-display" class="mt-4 text-center text-lg">
+            Score: <span id="score">0</span> | High Score: <span id="high-score">0</span>
+        </div>
+    </div>
+
+    <script>
+        // === Game Configuration ===
+        const CONFIG = {
+            PLAYER_SIZE: 20,
+            PLAYER_COLOR: '#48bb78', // Neon Green
+            GROUND_Y: 170,
+            GRAVITY: 0.8,
+            JUMP_VELOCITY: -15,
+            OBSTACLE_COLOR: '#e53e3e', // Red
+            OBSTACLE_SPEED: 5,
+            SPAWN_INTERVAL: 1200, // ms
+            MAX_OBSTACLES: 5,
+        };
+
+        // === Game State Variables ===
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score');
+        const highScoreDisplay = document.getElementById('high-score');
+        const startButton = document.getElementById('start-button');
+        const jumpButton = document.getElementById('jump-button');
+        const restartButton = document.getElementById('restart-button');
+        const gameMessage = document.getElementById('game-message');
+        const finalScoreText = document.getElementById('final-score');
+
+        let isGameRunning = false;
+        let score = 0;
+        let highScore = localStorage.getItem('highScore') ? parseInt(localStorage.getItem('highScore')) : 0;
+        let lastSpawnTime = 0;
+        let animationFrameId;
+
+        // Player object state
+        const player = {
+            x: 50,
+            y: CONFIG.GROUND_Y - CONFIG.PLAYER_SIZE,
+            width: CONFIG.PLAYER_SIZE,
+            height: CONFIG.PLAYER_SIZE,
+            velocityY: 0,
+            isJumping: false
+        };
+
+        // Array to hold obstacle objects
+        let obstacles = [];
+
+        // === Drawing Functions ===
+
+        function drawPlayer() {
+            ctx.fillStyle = player.isJumping ? '#a0aec0' : CONFIG.PLAYER_COLOR; // Change color slightly when jumping
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+        }
+
+        function drawObstacles() {
+            ctx.fillStyle = CONFIG.OBSTACLE_COLOR;
+            obstacles.forEach(obstacle => {
+                ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+            });
+        }
+        
+        function drawGround() {
+            ctx.strokeStyle = '#48bb78';
+            ctx.lineWidth = 2;
+            // Draw a ground line slightly below the player's base
+            ctx.beginPath();
+            ctx.moveTo(0, CONFIG.GROUND_Y);
+            ctx.lineTo(canvas.width, CONFIG.GROUND_Y);
+            ctx.stroke();
+        }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // === Game Logic Functions ===
+
+        function updatePlayer() {
+            if (player.isJumping) {
+                player.velocityY += CONFIG.GRAVITY;
+                player.y += player.velocityY;
+
+                // Check for landing
+                if (player.y >= CONFIG.GROUND_Y - player.height) {
+                    player.y = CONFIG.GROUND_Y - player.height;
+                    player.isJumping = false;
+                    player.velocityY = 0;
+                }
+            }
+        }
+
+        function updateObstacles(deltaTime) {
+            const speed = CONFIG.OBSTACLE_SPEED * (1 + score / 500); // Speed up as score increases
+            
+            obstacles.forEach(obstacle => {
+                obstacle.x -= speed;
+            });
+
+            // Remove off-screen obstacles and award score
+            obstacles = obstacles.filter(obstacle => {
+                if (obstacle.x + obstacle.width < 0) {
+                    score += 10;
+                    return false; // Remove the obstacle
+                }
+                return true;
+            });
+        }
+
+        function spawnObstacle(timestamp) {
+            if (timestamp - lastSpawnTime > CONFIG.SPAWN_INTERVAL) {
+                if (obstacles.length < CONFIG.MAX_OBSTACLES) {
+                    const width = 10 + Math.random() * 20;
+                    const height = 10 + Math.random() * 20;
+                    
+                    obstacles.push({
+                        x: canvas.width,
+                        y: CONFIG.GROUND_Y - height,
+                        width: width,
+                        height: height
+                    });
+                }
+                lastSpawnTime = timestamp;
+            }
+        }
+
+        function checkCollision() {
+            for (let i = 0; i < obstacles.length; i++) {
+                const obs = obstacles[i];
+
+                // Simple AABB collision detection
+                if (
+                    player.x < obs.x + obs.width &&
+                    player.x + player.width > obs.x &&
+                    player.y < obs.y + obs.height &&
+                    player.y + player.height > obs.y
+                ) {
+                    gameOver();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function updateScore() {
+            scoreDisplay.textContent = score;
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('highScore', highScore);
+                highScoreDisplay.textContent = highScore;
+            }
+        }
+
+        function jump() {
+            if (!player.isJumping && isGameRunning) {
+                player.isJumping = true;
+                player.velocityY = CONFIG.JUMP_VELOCITY;
+            }
+        }
+
+        // === Game Lifecycle ===
+
+        let lastTime = 0;
+        function gameLoop(timestamp) {
+            if (!isGameRunning) return;
+
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+
+            clearCanvas();
+            drawGround();
+            
+            spawnObstacle(timestamp);
+            updatePlayer();
+            updateObstacles(deltaTime);
+            checkCollision();
+            updateScore();
+
+            drawPlayer();
+            drawObstacles();
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function startGame() {
+            if (isGameRunning) return;
+            isGameRunning = true;
+            score = 0;
+            obstacles = [];
+            player.y = CONFIG.GROUND_Y - CONFIG.PLAYER_SIZE;
+            player.isJumping = false;
+            player.velocityY = 0;
+            lastTime = performance.now();
+            
+            gameMessage.classList.remove('visible');
+            startButton.disabled = true;
+            restartButton.disabled = true;
+            jumpButton.disabled = false;
+
+            // Start the main loop
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function gameOver() {
+            isGameRunning = false;
+            cancelAnimationFrame(animationFrameId);
+
+            finalScoreText.textContent = `FINAL SCORE: ${score}`;
+            gameMessage.classList.add('visible');
+            startButton.disabled = false;
+            restartButton.disabled = false;
+            jumpButton.disabled = true;
+        }
+
+        function init() {
+            // Set initial high score display
+            highScoreDisplay.textContent = highScore;
+            
+            // Draw initial player and ground
+            clearCanvas();
+            drawGround();
+            drawPlayer();
+
+            // Set up event listeners
+            startButton.addEventListener('click', startGame);
+            restartButton.addEventListener('click', startGame);
+            jumpButton.addEventListener('click', jump);
+            
+            // Keyboard Listener for Spacebar
+            document.addEventListener('keydown', (e) => {
+                if (e.code === 'Space' && isGameRunning) {
+                    e.preventDefault(); // Prevent scrolling
+                    jump();
+                } else if (e.code === 'Space' && !isGameRunning && gameMessage.classList.contains('visible')) {
+                    e.preventDefault();
+                    startGame();
+                }
+            });
+
+            // Touch/Click Listener for mobile responsiveness on the canvas itself
+            canvas.addEventListener('click', jump);
+            canvas.addEventListener('touchstart', jump);
+
+            // Responsive canvas resize (Important for mobile/Netlify deployment)
+            window.addEventListener('resize', resizeCanvas, false);
+            function resizeCanvas() {
+                // Get the parent container width
+                const containerWidth = document.getElementById('game-container').clientWidth - 40; 
+                canvas.width = containerWidth;
+            }
+            resizeCanvas();
+        }
+
+        // Start the initialization process when the window loads
+        window.onload = init;
+    </script>
+</body>
+</html>
